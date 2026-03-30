@@ -1,0 +1,162 @@
+[
+  {
+    "schemaVersion": "2.0",
+    "accountId": "123456789012",
+    "region": "eu-central-1",
+    "partition": "aws",
+    "id": "abc123def456abc123def456abc123de",
+    "arn": "arn:aws:guardduty:eu-central-1:123456789012:detector/abc/finding/abc123",
+    "type": "UnauthorizedAccess:EC2/SSHBruteForce",
+    "resource": {
+      "resourceType": "Instance",
+      "instanceDetails": {
+        "instanceId": "i-0abc123def456789",
+        "instanceType": "t3.micro",
+        "tags": [
+          { "key": "Environment", "value": "production" },
+          { "key": "Name", "value": "web-server-01" }
+        ]
+      }
+    },
+    "service": {
+      "serviceName": "guardduty",
+      "detectorId": "abc123detector",
+      "action": {
+        "actionType": "NETWORK_CONNECTION",
+        "networkConnectionAction": {
+          "connectionDirection": "INBOUND",
+          "remoteIpDetails": {
+            "ipAddressV4": "198.51.100.23",
+            "country": { "countryName": "Russia" },
+            "organization": { "asn": "12345", "org": "SuspiciousHosting Ltd" }
+          },
+          "localPortDetails": { "port": 22, "portName": "SSH" },
+          "protocol": "TCP"
+        }
+      },
+      "count": 150,
+      "firstSeen": "2026-03-28T08:00:00Z",
+      "lastSeen": "2026-03-30T14:32:00Z"
+    },
+    "severity": 8.0,
+    "createdAt": "2026-03-28T08:00:00Z",
+    "updatedAt": "2026-03-30T14:32:00Z",
+    "title": "SSH brute force attack against i-0abc123def456789",
+    "description": "198.51.100.23 is performing SSH brute force attacks against instance i-0abc123def456789. Brute force attacks are used to gain unauthorized access by guessing the SSH password."
+  },
+  {
+    "schemaVersion": "2.0",
+    "accountId": "123456789012",
+    "region": "eu-central-1",
+    "partition": "aws",
+    "id": "def456abc123def456abc123def456ab",
+    "arn": "arn:aws:guardduty:eu-central-1:123456789012:detector/abc/finding/def456",
+    "type": "Stealth:IAMUser/CloudTrailLoggingDisabled",
+    "resource": {
+      "resourceType": "AccessKey",
+      "accessKeyDetails": {
+        "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
+        "principalId": "AIDACKCEVSQ6C2EXAMPLE",
+        "userType": "IAMUser",
+        "userName": "devops-automation"
+      }
+    },
+    "service": {
+      "serviceName": "guardduty",
+      "detectorId": "abc123detector",
+      "action": {
+        "actionType": "AWS_API_CALL",
+        "awsApiCallAction": {
+          "api": "StopLogging",
+          "serviceName": "cloudtrail.amazonaws.com",
+          "callerType": "Remote IP",
+          "remoteIpDetails": {
+            "ipAddressV4": "203.0.113.99",
+            "country": { "countryName": "China" }
+          }
+        }
+      },
+      "count": 1,
+      "firstSeen": "2026-03-30T02:15:00Z",
+      "lastSeen": "2026-03-30T02:15:00Z"
+    },
+    "severity": 9.5,
+    "createdAt": "2026-03-30T02:15:00Z",
+    "updatedAt": "2026-03-30T02:15:00Z",
+    "title": "CloudTrail logging was disabled by devops-automation",
+    "description": "CloudTrail logging was disabled by devops-automation. This is a common technique used by attackers to disable logging in order to evade detection."
+  },
+  {
+    "schemaVersion": "2.0",
+    "accountId": "123456789012",
+    "region": "eu-central-1",
+    "partition": "aws",
+    "id": "ghi789jkl012ghi789jkl012ghi789jk",
+    "arn": "arn:aws:guardduty:eu-central-1:123456789012:detector/abc/finding/ghi789",
+    "type": "Exfiltration:S3/AnomalousBehavior",
+    "resource": {
+      "resourceType": "S3Bucket",
+      "s3BucketDetails": [
+        {
+          "name": "company-sensitive-data-prod",
+          "type": "Destination",
+          "tags": [{ "key": "DataClassification", "value": "confidential" }]
+        }
+      ]
+    },
+    "service": {
+      "serviceName": "guardduty",
+      "detectorId": "abc123detector",
+      "action": {
+        "actionType": "AWS_API_CALL",
+        "awsApiCallAction": {
+          "api": "GetObject",
+          "serviceName": "s3.amazonaws.com",
+          "callerType": "Remote IP",
+          "remoteIpDetails": {
+            "ipAddressV4": "198.51.100.77",
+            "country": { "countryName": "Unknown" }
+          }
+        }
+      },
+      "count": 843,
+      "firstSeen": "2026-03-30T09:00:00Z",
+      "lastSeen": "2026-03-30T11:45:00Z"
+    },
+    "severity": 9.0,
+    "createdAt": "2026-03-30T09:00:00Z",
+    "updatedAt": "2026-03-30T11:45:00Z",
+    "title": "Anomalous S3 object reads from sensitive bucket",
+    "description": "843 S3 GetObject calls were made from an unusual IP to the company-sensitive-data-prod bucket. This pattern is consistent with data exfiltration."
+  },
+  {
+    "schemaVersion": "2.0",
+    "accountId": "123456789012",
+    "region": "eu-central-1",
+    "partition": "aws",
+    "id": "abc123def456abc123def456abc123de",
+    "arn": "arn:aws:guardduty:eu-central-1:123456789012:detector/abc/finding/abc123",
+    "type": "UnauthorizedAccess:EC2/SSHBruteForce",
+    "resource": {
+      "resourceType": "Instance",
+      "instanceDetails": {
+        "instanceId": "i-0abc123def456789",
+        "instanceType": "t3.micro",
+        "tags": []
+      }
+    },
+    "service": {
+      "serviceName": "guardduty",
+      "detectorId": "abc123detector",
+      "action": { "actionType": "NETWORK_CONNECTION" },
+      "count": 152,
+      "firstSeen": "2026-03-28T08:00:00Z",
+      "lastSeen": "2026-03-30T14:35:00Z"
+    },
+    "severity": 8.0,
+    "createdAt": "2026-03-28T08:00:00Z",
+    "updatedAt": "2026-03-30T14:35:00Z",
+    "title": "SSH brute force attack against i-0abc123def456789",
+    "description": "Duplicate of the first finding — should be deduplicated by the normalizer."
+  }
+]
