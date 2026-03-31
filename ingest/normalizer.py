@@ -68,32 +68,52 @@ def _severity_label(score: float) -> str:
 
 def _extract_resource_id(resource: dict) -> tuple[str, str]:
     """
-    CONCEPT: Defensive extraction
-    GuardDuty findings use different resource shapes depending
-    on the finding type. An EC2 finding has instanceDetails,
-    an IAM finding has accessKeyDetails, etc.
-
-    We use .get() with defaults everywhere — this means if a
-    field is missing (e.g. malformed finding), we get an empty
-    string instead of a KeyError that crashes the pipeline.
-
-    Returns: (resource_type, resource_id)
+    Extract resource type and ID. Assumes keys already lowercased
+    by _lowercase_keys() in normalize().
     """
-    rtype = resource.get("resourceType", "Unknown")
+    rtype = resource.get("resourcetype", "Unknown")
 
-    if rtype == "Instance":
-        rid = resource.get("instanceDetails", {}).get("instanceId", "unknown-instance")
+    if rtype.lower() == "instance":
+        details = resource.get("instancedetails", {})
+        rid = details.get("instanceid", "unknown-instance")
 
-    elif rtype == "AccessKey":
-        details = resource.get("accessKeyDetails", {})
-        rid = details.get("userName", details.get("accessKeyId", "unknown-key"))
+    elif rtype.lower() == "accesskey":
+        details = resource.get("accesskeydetails", {})
+        rid = details.get("username") or details.get("accesskeyid") or "unknown-key"
 
-    elif rtype == "S3Bucket":
-        buckets = resource.get("s3BucketDetails", [])
+    elif rtype.lower() == "s3bucket":
+        buckets = resource.get("s3bucketdetails", [])
         rid = buckets[0].get("name", "unknown-bucket") if buckets else "unknown-bucket"
 
+    elif rtype.lower() == "ekscluster":
+        rid = resource.get("eksclusterdetails", {}).get("name", "unknown-eks-cluster")
+
+    elif rtype.lower() == "kubernetescluster":
+        rid = resource.get("kubernetesdetails", {}).get(
+            "kubernetesworkloaddetails", {}
+        ).get("name", "unknown-k8s-workload")
+
+    elif rtype.lower() == "ecscluster":
+        rid = resource.get("ecsclusterdetails", {}).get("name", "unknown-ecs-cluster")
+
+    elif rtype.lower() == "rdsdbinstance":
+        rid = resource.get("rdsdbinstancedetails", {}).get(
+            "dbinstanceidentifier", "unknown-rds-instance"
+        )
+
+    elif rtype.lower() == "rdslimitlessdb":
+        rid = resource.get("rdslimitlessdbdetails", {}).get(
+            "dbclusteridentifier", "unknown-rds-limitless"
+        )
+
+    elif rtype.lower() == "lambda":
+        rid = resource.get("lambdadetails", {}).get("functionname", "unknown-lambda")
+
+    elif rtype.lower() == "container":
+        rid = resource.get("containerdetails", {}).get("name", "unknown-container")
+
     else:
-        rid = "unknown-resource"
+        rid = f"unknown-{rtype.lower()}-resource"
 
     return rtype, rid
 
@@ -162,12 +182,36 @@ def _make_fingerprint(finding_type: str, resource_id: str, account_id: str) -> s
     raw_string = f"{finding_type}::{resource_id}::{account_id}"
     return hashlib.sha256(raw_string.encode()).hexdigest()[:16]
 
+def _lowercase_keys(obj):
+    """
+    CONCEPT: Recursive key normalisation
+    AWS Boto3 returns PascalCase keys (Type, Id, AccountId).
+    Our normalizer expects camelCase/lowercase (type, id, accountId).
+    
+    This function recursively converts every dict key in the
+    entire finding to lowercase — so 'AccountId' becomes 'accountid',
+    'ResourceType' becomes 'resourcetype', etc.
+    
+    We do this ONCE at the entry point so all downstream
+    extraction functions can use consistent lowercase keys
+    without any changes.
+    """
+    if isinstance(obj, dict):
+        return {k.lower(): _lowercase_keys(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_lowercase_keys(i) for i in obj]
+    return obj
+
 
 def normalize(raw_finding: dict) -> NormalizedAlert:
     """
     Core normalization function.
     Takes one raw GuardDuty finding dict, returns one NormalizedAlert.
     """
+    # Normalise all keys to lowercase — handles both mock (camelCase)
+    # and live AWS API responses (PascalCase) transparently
+    raw_finding = _lowercase_keys(raw_finding)
+
     resource = raw_finding.get("resource", {})
     service  = raw_finding.get("service", {})
     action   = service.get("action", {})
