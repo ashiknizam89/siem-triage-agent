@@ -144,6 +144,76 @@ GUARDDUTY_TO_ATTACK: dict[str, dict] = {
         "tactic": "Impact", "tactic_id": "TA0040",
         "technique": "Data destruction", "technique_id": "T1485"
     },
+
+    # ── Runtime threats ────────────────────────────────────────
+    "Backdoor:Runtime/C&CActivity.B!DNS": {
+        "tactic": "Command and Control", "tactic_id": "TA0011",
+        "technique": "Application layer protocol — DNS", "technique_id": "T1071.004"
+    },
+    "Trojan:Runtime/DropPoint": {
+        "tactic": "Exfiltration", "tactic_id": "TA0010",
+        "technique": "Exfiltration over web service", "technique_id": "T1567"
+    },
+    "Trojan:Runtime/DriveBySourceTraffic!DNS": {
+        "tactic": "Command and Control", "tactic_id": "TA0011",
+        "technique": "Application layer protocol — DNS", "technique_id": "T1071.004"
+    },
+    "Execution:Runtime/NewBinaryExecuted": {
+        "tactic": "Execution", "tactic_id": "TA0002",
+        "technique": "User execution — malicious file", "technique_id": "T1204.002"
+    },
+    "Execution:Runtime/SuspiciousShellCreated": {
+        "tactic": "Execution", "tactic_id": "TA0002",
+        "technique": "Command and scripting interpreter", "technique_id": "T1059"
+    },
+    "DefenseEvasion:EC2/UnusualDNSResolver": {
+        "tactic": "Defense Evasion", "tactic_id": "TA0005",
+        "technique": "Hide artifacts", "technique_id": "T1564"
+    },
+    "PrivilegeEscalation:Kubernetes/AnomalousBehavior": {
+        "tactic": "Privilege Escalation", "tactic_id": "TA0004",
+        "technique": "Exploitation for privilege escalation", "technique_id": "T1068"
+    },
+    "PrivilegeEscalation:Runtime/ElevationToRoot": {
+        "tactic": "Privilege Escalation", "tactic_id": "TA0004",
+        "technique": "Exploitation for privilege escalation", "technique_id": "T1068"
+    },
+    "PrivilegeEscalation:Runtime/UserfaultfdSyscall": {
+        "tactic": "Privilege Escalation", "tactic_id": "TA0004",
+        "technique": "Exploitation for privilege escalation", "technique_id": "T1068"
+    },
+    "Impact:Runtime/SuspiciousDomainRequest.Reputation": {
+        "tactic": "Impact", "tactic_id": "TA0040",
+        "technique": "Resource hijacking", "technique_id": "T1496"
+    },
+    "Impact:Runtime/AbusedDomainRequest.Reputation": {
+        "tactic": "Impact", "tactic_id": "TA0040",
+        "technique": "Resource hijacking", "technique_id": "T1496"
+    },
+    "Impact:IAMUser/AnomalousBehavior": {
+        "tactic": "Impact", "tactic_id": "TA0040",
+        "technique": "Account access removal", "technique_id": "T1531"
+    },
+    "Impact:Kubernetes/MaliciousIPCaller.Custom": {
+        "tactic": "Impact", "tactic_id": "TA0040",
+        "technique": "Resource hijacking", "technique_id": "T1496"
+    },
+    "Persistence:Runtime/SuspiciousCommand": {
+        "tactic": "Persistence", "tactic_id": "TA0003",
+        "technique": "Event triggered execution", "technique_id": "T1546"
+    },
+    "CredentialAccess:RDS/AnomalousBehavior.SuccessfulLogin": {
+        "tactic": "Credential Access", "tactic_id": "TA0006",
+        "technique": "Brute force — password spraying", "technique_id": "T1110.003"
+    },
+    "UnauthorizedAccess:EC2/TorClient": {
+        "tactic": "Defense Evasion", "tactic_id": "TA0005",
+        "technique": "Proxy — Tor", "technique_id": "T1090.003"
+    },
+    "Policy:IAMUser/RootCredentialUsage": {
+        "tactic": "Privilege Escalation", "tactic_id": "TA0004",
+        "technique": "Valid accounts — root account", "technique_id": "T1078.003"
+    },
 }
 
 # Sentinel value — signals "LLM enrichment needed"
