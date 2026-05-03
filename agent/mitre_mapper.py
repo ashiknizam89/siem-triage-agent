@@ -210,10 +210,8 @@ GUARDDUTY_TO_ATTACK: dict[str, dict] = {
         "tactic": "Defense Evasion", "tactic_id": "TA0005",
         "technique": "Proxy — Tor", "technique_id": "T1090.003"
     },
-    "Policy:IAMUser/RootCredentialUsage": {
-        "tactic": "Privilege Escalation", "tactic_id": "TA0004",
-        "technique": "Valid accounts — root account", "technique_id": "T1078.003"
-    },
+    # Note: Policy:IAMUser/RootCredentialUsage is defined above under
+    # Privilege Escalation — the duplicate entry that was here has been removed.
 }
 
 # Sentinel value — signals "LLM enrichment needed"

@@ -38,7 +38,13 @@ def fetch_alerts(
     """
     if mode == "mock":
         print(f"[fetcher] Mode: MOCK — loading {mock_file}")
-        raw = json.loads(Path(mock_file).read_text())
+        mock_path = Path(mock_file)
+        if not mock_path.exists():
+            raise FileNotFoundError(
+                f"[fetcher] Mock file not found: {mock_path.resolve()}. "
+                "Run from the project root or pass an explicit mock_file= path."
+            )
+        raw = json.loads(mock_path.read_text())
 
     elif mode == "live":
         print(f"[fetcher] Mode: LIVE — pulling from AWS "

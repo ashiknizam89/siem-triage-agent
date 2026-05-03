@@ -18,7 +18,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -61,7 +61,7 @@ class TriageDecision(BaseModel):
         ge=0, le=100,
         description="Confidence in the assessment, 0-100"
     )
-    priority: str = Field(
+    priority: Literal["IMMEDIATE", "HIGH", "MEDIUM", "LOW"] = Field(
         description="Response priority: IMMEDIATE / HIGH / MEDIUM / LOW"
     )
     analyst_summary: str = Field(
