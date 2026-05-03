@@ -122,23 +122,26 @@ def _extract_actor(action: dict) -> tuple[Optional[str], Optional[str]]:
     """
     Extract attacker IP and country from the action block.
     GuardDuty nests this differently for network vs API actions.
+
+    Note: action dict has already been through _lowercase_keys(), so all
+    keys are lowercase (e.g. "networkconnectionaction", not "networkConnectionAction").
     """
     # Network connection finding (e.g. SSH brute force)
-    net = action.get("networkConnectionAction", {})
+    net = action.get("networkconnectionaction", {})
     if net:
-        ip_details = net.get("remoteIpDetails", {})
+        ip_details = net.get("remoteipdetails", {})
         return (
-            ip_details.get("ipAddressV4"),
-            ip_details.get("country", {}).get("countryName")
+            ip_details.get("ipaddressv4"),
+            ip_details.get("country", {}).get("countryname")
         )
 
     # API call finding (e.g. CloudTrail disabled, S3 exfil)
-    api = action.get("awsApiCallAction", {})
+    api = action.get("awsapicallaction", {})
     if api:
-        ip_details = api.get("remoteIpDetails", {})
+        ip_details = api.get("remoteipdetails", {})
         return (
-            ip_details.get("ipAddressV4"),
-            ip_details.get("country", {}).get("countryName")
+            ip_details.get("ipaddressv4"),
+            ip_details.get("country", {}).get("countryname")
         )
 
     return None, None
@@ -149,12 +152,15 @@ def _extract_environment(resource: dict) -> str:
     Check resource tags for an Environment tag.
     This lets the LLM know if the affected asset is
     production (higher priority) or development.
+
+    Note: resource dict has already been through _lowercase_keys(), so all
+    keys are lowercase (e.g. "instancedetails", not "instanceDetails").
+    Parentheses around the ternary make operator precedence explicit.
     """
-    # Tags can appear at different nesting levels
     tags = (
-        resource.get("instanceDetails", {}).get("tags", []) or
-        resource.get("s3BucketDetails", [{}])[0].get("tags", [])
-        if resource.get("s3BucketDetails") else []
+        resource.get("instancedetails", {}).get("tags", []) or
+        (resource.get("s3bucketdetails", [{}])[0].get("tags", [])
+         if resource.get("s3bucketdetails") else [])
     )
     for tag in tags:
         if tag.get("key", "").lower() == "environment":

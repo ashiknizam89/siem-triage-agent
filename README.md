@@ -79,6 +79,68 @@ Running against 20 real GuardDuty sample findings (eu-north-1):
 
 ---
 
+## Vulnerability Intelligence Extension
+
+`ingest/cve_parser.py` extends the pipeline to consume **structured vulnerability feeds from the NVD**, bridging the gap between raw SIEM alerts and the vendor advisory processing workflows at the core of enterprise vulnerability intelligence teams.
+
+### How it connects to real workflows
+
+Enterprise vulnerability teams (e.g. Siemens ProductCERT) receive hundreds of vendor advisories per week — Fortinet PSIRTs, Microsoft Patch Tuesdays, Cisco Security Advisories. The manual review cycle is:
+
+1. Receive advisory → extract CVE IDs
+2. Look up each CVE in NVD for CVSS score, affected CPE scope, CWE root cause
+3. Validate that the affected products match the internal asset inventory
+4. Generate a customer-facing notification or internal impact ticket
+
+`cve_parser.py` automates steps 1–3. The validated `CVENotification` object maps directly to the fields in `TriageTicket`, so CVE data can be injected into the same LLM triage pipeline that handles GuardDuty alerts.
+
+### Fetching and parsing CVE-2024-21762 (Fortinet SSL-VPN RCE)
+
+```python
+from ingest.cve_parser import fetch_cve, batch_fetch_cves
+
+# Single CVE — Fortinet FortiOS out-of-bounds write, CVSS 9.8 CRITICAL
+# Actively exploited in the wild before the patch was available
+cve = fetch_cve("CVE-2024-21762")
+
+print(cve.cve_id)            # "CVE-2024-21762"
+print(cve.cvss_v31_score)    # 9.8
+print(cve.cvss_v31_severity) # "CRITICAL"
+print(cve.cvss_v31_vector)   # "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+print(cve.cwe_ids)           # ["CWE-787"]
+print(cve.affected_cpes)
+# ["cpe:2.3:o:fortinet:fortios:*:*:*:*:*:*:*:*",
+#  "cpe:2.3:a:fortinet:fortiproxy:*:*:*:*:*:*:*:*"]
+
+# Compatible with the existing ticket pipeline
+print(cve.to_ticket_summary())
+# "CVE-2024-21762 (CVSS v3.1 base score 9.8 (CRITICAL)). Root cause: CWE-787.
+#  A out-of-bounds write vulnerability in Fortinet FortiOS..."
+
+# Batch fetch — respects NVD rate limits (6s between requests by default)
+# Pass api_key= and rate_delay=0.6 when you have an NVD API key
+patch_tuesday = batch_fetch_cves([
+    "CVE-2024-21762",  # Fortinet FortiOS RCE
+    "CVE-2021-44228",  # Log4Shell
+    "CVE-2023-44487",  # HTTP/2 Rapid Reset
+])
+critical = [c for c in patch_tuesday if c.cvss_v31_score and c.cvss_v31_score >= 9.0]
+```
+
+### Connection to enterprise notification workflows
+
+| CVENotification field | Vendor advisory use case |
+|---|---|
+| `cve_id` | Deduplicate incoming advisories from multiple CNAs |
+| `cvss_v31_score` + `cvss_v31_severity` | Triage priority for internal patching SLA |
+| `affected_cpes` | Match against CMDB / asset inventory to determine exposure |
+| `cwe_ids` | Root cause classification for recurrence prevention |
+| `reference_urls` | Link to vendor patch, PoC, and workaround documentation |
+| `vuln_status` | Gate notifications — only "Analyzed" CVEs have complete NVD data |
+| `to_ticket_summary()` | Pre-fill the LLM triage prompt or Jira ticket description |
+
+---
+
 ## Tech stack
 
 | Layer             | Technology         |
@@ -103,7 +165,8 @@ siem-triage-agent/
 │   ├── normalizer.py             # Parse, flatten, deduplicate, enrich
 │   ├── guardduty_fetcher.py      # Live AWS GuardDuty integration
 │   ├── cloudtrail_fetcher.py     # CloudTrail context fetcher
-│   └── fetcher.py                # Unified mock/live entry point
+│   ├── fetcher.py                # Unified mock/live entry point
+│   └── cve_parser.py             # NVD API 2.0 CVE fetch + Pydantic validation
 ├── agent/
 │   ├── mitre_mapper.py           # ATT&CK mapping (static + LLM)
 │   └── triage_agent.py           # Core LLM triage with Pydantic validation
@@ -113,6 +176,7 @@ siem-triage-agent/
 │   ├── logger.py                 # SQLite persistence
 │   └── dashboard.py              # Streamlit SOC dashboard
 ├── tests/
+│   └── test_cve_parser.py        # Unit tests for CVE parser (mocked HTTP)
 ├── .env                          # API keys (not committed)
 ├── requirements.txt
 └── README.md
