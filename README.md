@@ -250,6 +250,7 @@ streamlit run store/dashboard.py
 - **The LLM steps need an OpenAI API key** (triage, and ATT&CK mapping for finding types not in the static table). The tests don't: they mock the OpenAI client and NVD HTTP calls.
 - **Test coverage:** the tests cover the CVE parser, the normalizer and deduplication, the static and LLM-fallback ATT&CK mapping, `TriageDecision` schema validation, `triage_alert()` response handling, and ticket generation. They don't cover the AWS fetchers, the SQLite logger or the Streamlit dashboard, and they don't measure LLM answer quality.
 - **Evaluation:** 20 sample findings, labelled manually, all malicious. See [Evaluation](#evaluation).
+- The 19/20 evaluation ran before the normaliser fix in [`1cc820b`](https://github.com/ashiknizam89/siem-triage-agent/commit/1cc820b). At that time the model saw 'AWS account: unknown' and the ingestion time instead of the finding's createdAt.
 
 ---
 
