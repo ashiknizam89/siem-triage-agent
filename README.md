@@ -1,18 +1,19 @@
 # 🛡️ LLM-Assisted SIEM Triage Agent
 
-> Autonomous security alert triage powered by GPT-4o-mini and MITRE ATT&CK — reducing mean-time-to-respond from minutes to seconds.
+> LLM-assisted triage of AWS GuardDuty findings with MITRE ATT&CK mapping and schema-validated output.
 
-![Python](https://img.shields.io/badge/Python-3.11-blue)
+[![CI](https://github.com/ashiknizam89/siem-triage-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ashiknizam89/siem-triage-agent/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue)
 ![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-green)
 ![AWS](https://img.shields.io/badge/AWS-GuardDuty-orange)
 ![MITRE](https://img.shields.io/badge/MITRE-ATT%26CK-red)
-![License](https://img.shields.io/badge/License-MIT-lightgrey)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
 ---
 
 ## The problem
 
-A Tier-1 SOC analyst manually triages hundreds of alerts per shift. Each alert requires:
+A Tier-1 SOC analyst triages each alert by hand:
 
 - Reading and understanding the finding
 - Mapping it to a threat framework (MITRE ATT&CK)
@@ -20,11 +21,11 @@ A Tier-1 SOC analyst manually triages hundreds of alerts per shift. Each alert r
 - Determining response priority
 - Writing up recommended actions
 
-This takes **5–15 minutes per alert**. At scale, critical threats get buried in noise.
+At volume, critical threats get buried in noise.
 
-## The solution
+## What this does
 
-An agentic pipeline that ingests raw AWS GuardDuty findings and produces structured triage decisions in **under 2 seconds per alert** — with MITRE ATT&CK mapping, confidence scoring, and prioritised response actions.
+A pipeline that ingests AWS GuardDuty findings and produces one structured triage ticket per finding, with a MITRE ATT&CK mapping, a confidence score, a priority and a list of response actions. The LLM output is validated against a Pydantic schema before it is stored.
 
 ---
 
@@ -53,106 +54,88 @@ AWS GuardDuty → Normalizer → MITRE Mapper → LLM Triage Agent → Ticket �
 
 ## Key technical decisions
 
-**Two-layer ATT&CK mapping** — static lookup table handles ~80% of findings instantly (free, deterministic). LLM enrichment handles the remaining 20% of novel finding types. This minimises API cost while maintaining coverage.
+**Two-layer ATT&CK mapping**: a static lookup table (38 GuardDuty finding types) is tried first and needs no API call. Finding types that are not in the table go to the LLM. On the 20-finding evaluation sample, 16 were mapped by the static lookup and 4 by the LLM.
 
-**`temperature=0` for all classifications** — security triage decisions must be deterministic and auditable. The same alert always produces the same ATT&CK mapping and priority assessment.
+**`temperature=0` for all classifications**: temperature=0 reduces variation but doesn't guarantee identical output, which is one reason every response is validated with Pydantic before storage.
 
-**Hash-based deduplication** — GuardDuty re-emits the same finding repeatedly. We fingerprint on `finding_type + resource_id + account_id` (excluding timestamp) to suppress duplicates before they reach the LLM, saving tokens and preventing duplicate tickets.
+**Hash-based deduplication**: GuardDuty re-emits the same finding repeatedly. The normalizer fingerprints on `finding_type + resource_id + account_id` (excluding timestamp) and drops duplicates before they reach the LLM, so a repeated finding costs no tokens and produces no duplicate ticket.
 
-**Pydantic output validation** — LLM responses are validated against a strict schema before entering the pipeline. Malformed outputs are caught and logged rather than propagating silently.
+**Pydantic output validation**: LLM responses are parsed as JSON and validated against the `TriageDecision` schema (required fields, `priority` limited to `IMMEDIATE` / `HIGH` / `MEDIUM` / `LOW`, `confidence` 0–100). A response that fails either step is logged and that alert is skipped; no ticket is created from it.
 
-**Least-privilege IAM** — uses a dedicated `siem-triage-dev` IAM user with only `AmazonGuardDutyReadOnlyAccess` and `AWSCloudTrail_ReadOnlyAccess`. No write permissions, no admin access.
+**Read-only AWS access**: live mode only reads. The IAM user needs `AmazonGuardDutyReadOnlyAccess` and `AWSCloudTrail_ReadOnlyAccess`, nothing else.
 
-**Mock/live mode switching** — `fetcher.py` abstracts the data source. `mode="mock"` uses local JSON fixtures for development and CI. `mode="live"` pulls from real AWS. The rest of the pipeline is identical in both modes.
-
----
-
-## Results on live AWS data
-
-Running against 20 real GuardDuty sample findings (eu-north-1):
-
-- **20/20 alerts** normalized and deduplicated
-- **12 static** ATT&CK lookups + **8 LLM** enrichments
-- **20 triage tickets** generated in ~45 seconds
-- **19 true positives** identified (95% TP rate on sample data)
-- Finding types covered: EC2, EKS, RDS, S3, IAM, Kubernetes, Runtime, ECS
+**Mock/live mode switching**: `fetcher.py` abstracts the data source. `mode="mock"` uses local JSON fixtures, which the tests and CI also use. `mode="live"` pulls from real AWS. The rest of the pipeline is identical in both modes.
 
 ---
 
-## Vulnerability Intelligence Extension
+## Evaluation
 
-`ingest/cve_parser.py` extends the pipeline to consume **structured vulnerability feeds from the NVD**, bridging the gap between raw SIEM alerts and the vendor advisory processing workflows at the core of enterprise vulnerability intelligence teams.
+20 GuardDuty sample findings from eu-north-1, each labelled by me:
 
-### How it connects to real workflows
+- **Triage labels:** 19 of 20 matched my label (Wilson 95% CI roughly 76–99%).
+- **ATT&CK mapping:** 16 findings were mapped by the static lookup and 4 by the LLM.
+- **No false-positive rate:** the sample contains no benign findings, so no false-positive rate can be claimed.
 
-Enterprise vulnerability teams (e.g. Siemens ProductCERT) receive hundreds of vendor advisories per week — Fortinet PSIRTs, Microsoft Patch Tuesdays, Cisco Security Advisories. The manual review cycle is:
+Small sample: this shows the pipeline works end to end, not production accuracy.
 
-1. Receive advisory → extract CVE IDs
-2. Look up each CVE in NVD for CVSS score, affected CPE scope, CWE root cause
-3. Validate that the affected products match the internal asset inventory
-4. Generate a customer-facing notification or internal impact ticket
+**Method:** the evaluation was done manually, by comparing the model's triage label with my own label for each of the 20 sample findings. The labels and the evaluation script are not included in this repo.
 
-`cve_parser.py` automates steps 1–3. The validated `CVENotification` object maps directly to the fields in `TriageTicket`, so CVE data can be injected into the same LLM triage pipeline that handles GuardDuty alerts.
+The 20 findings are committed as `ingest/live_findings.json` (account ID replaced with the AWS documentation placeholder `123456789012`). The 16/4 mapping split can be reproduced offline, because it depends only on the static table:
 
-### Fetching and parsing CVE-2024-21762 (Fortinet SSL-VPN RCE)
+```bash
+python -c "
+import json
+from ingest.normalizer import normalize_all
+from agent.mitre_mapper import map_all
+alerts = map_all(normalize_all(json.load(open('ingest/live_findings.json'))), client=None)
+print(sum(a.mitre['tactic_id'] != 'TA0000' for a in alerts), 'of', len(alerts), 'mapped by static lookup')
+"
+```
+
+---
+
+## CVE parser (standalone module)
+
+`ingest/cve_parser.py` fetches a CVE from the NVD API 2.0 and parses it into a Pydantic-validated `CVENotification`: CVSS v3.1 score, severity and vector, CWE IDs, the CPEs marked as vulnerable, reference URLs, the NVD status and the English description. It is not yet connected to the GuardDuty triage pipeline.
 
 ```python
 from ingest.cve_parser import fetch_cve, batch_fetch_cves
 
-# Single CVE — Fortinet FortiOS out-of-bounds write, CVSS 9.8 CRITICAL
-# Actively exploited in the wild before the patch was available
-cve = fetch_cve("CVE-2024-21762")
+cve = fetch_cve("CVE-2024-21762")   # Fortinet FortiOS out-of-bounds write
 
-print(cve.cve_id)            # "CVE-2024-21762"
-print(cve.cvss_v31_score)    # 9.8
-print(cve.cvss_v31_severity) # "CRITICAL"
-print(cve.cvss_v31_vector)   # "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-print(cve.cwe_ids)           # ["CWE-787"]
-print(cve.affected_cpes)
-# ["cpe:2.3:o:fortinet:fortios:*:*:*:*:*:*:*:*",
-#  "cpe:2.3:a:fortinet:fortiproxy:*:*:*:*:*:*:*:*"]
+print(cve.cvss_v31_score)     # 9.8
+print(cve.cvss_v31_severity)  # "CRITICAL"
+print(cve.cwe_ids)            # ["CWE-787"]
+print(cve.to_ticket_summary())  # one-paragraph text summary
 
-# Compatible with the existing ticket pipeline
-print(cve.to_ticket_summary())
-# "CVE-2024-21762 (CVSS v3.1 base score 9.8 (CRITICAL)). Root cause: CWE-787.
-#  A out-of-bounds write vulnerability in Fortinet FortiOS..."
-
-# Batch fetch — respects NVD rate limits (6s between requests by default)
-# Pass api_key= and rate_delay=0.6 when you have an NVD API key
-patch_tuesday = batch_fetch_cves([
-    "CVE-2024-21762",  # Fortinet FortiOS RCE
-    "CVE-2021-44228",  # Log4Shell
-    "CVE-2023-44487",  # HTTP/2 Rapid Reset
-])
-critical = [c for c in patch_tuesday if c.cvss_v31_score and c.cvss_v31_score >= 9.0]
+# Batch fetch: sleeps between requests to respect NVD rate limits (6 s by default).
+# Pass api_key= and rate_delay=0.6 when you have an NVD API key.
+cves = batch_fetch_cves(["CVE-2024-21762", "CVE-2021-44228", "CVE-2023-44487"])
 ```
 
-### Connection to enterprise notification workflows
+What it handles (all covered by tests with mocked HTTP):
 
-| CVENotification field | Vendor advisory use case |
-|---|---|
-| `cve_id` | Deduplicate incoming advisories from multiple CNAs |
-| `cvss_v31_score` + `cvss_v31_severity` | Triage priority for internal patching SLA |
-| `affected_cpes` | Match against CMDB / asset inventory to determine exposure |
-| `cwe_ids` | Root cause classification for recurrence prevention |
-| `reference_urls` | Link to vendor patch, PoC, and workaround documentation |
-| `vuln_status` | Gate notifications — only "Analyzed" CVEs have complete NVD data |
-| `to_ticket_summary()` | Pre-fill the LLM triage prompt or Jira ticket description |
+- CVE ID format validation before any network call
+- CVEs without CVSS data yet (for example "Awaiting Analysis"): score fields are `None`
+- 404 and zero-result responses raise `ValueError`; other HTTP errors propagate
+- `batch_fetch_cves()` skips invalid, missing or failing IDs and continues with the rest
+- Schema checks: score between 0 and 10, valid severity label, `CVSS:3.1/` vector prefix
 
 ---
 
 ## Tech stack
 
-| Layer             | Technology         |
-| ----------------- | ------------------ |
-| Language          | Python 3.11        |
-| LLM               | OpenAI GPT-4o-mini |
-| AWS SDK           | Boto3              |
-| Output validation | Pydantic           |
-| Database          | SQLite (stdlib)    |
-| Dashboard         | Streamlit + Plotly |
-| Terminal UI       | Rich               |
-| Secret management | python-dotenv      |
+| Layer             | Technology                         |
+| ----------------- | ---------------------------------- |
+| Language          | Python 3.11 (CI also tests 3.12)   |
+| LLM               | OpenAI GPT-4o-mini                 |
+| AWS SDK           | Boto3                              |
+| Output validation | Pydantic                           |
+| Database          | SQLite (stdlib)                    |
+| Dashboard         | Streamlit + Plotly                 |
+| Terminal UI       | Rich                               |
+| Secret management | python-dotenv                      |
+| Tests             | pytest, GitHub Actions             |
 
 ---
 
@@ -160,8 +143,10 @@ critical = [c for c in patch_tuesday if c.cvss_v31_score and c.cvss_v31_score >=
 
 ```
 siem-triage-agent/
+├── .github/workflows/ci.yml      # pytest on Python 3.11 and 3.12
 ├── ingest/
-│   ├── mock_alerts.json          # Realistic GuardDuty test fixtures
+│   ├── mock_alerts.json          # GuardDuty-format test fixtures
+│   ├── live_findings.json        # The 20 evaluation findings (account ID redacted)
 │   ├── normalizer.py             # Parse, flatten, deduplicate, enrich
 │   ├── guardduty_fetcher.py      # Live AWS GuardDuty integration
 │   ├── cloudtrail_fetcher.py     # CloudTrail context fetcher
@@ -176,9 +161,12 @@ siem-triage-agent/
 │   ├── logger.py                 # SQLite persistence
 │   └── dashboard.py              # Streamlit SOC dashboard
 ├── tests/
-│   └── test_cve_parser.py        # Unit tests for CVE parser (mocked HTTP)
-├── .env                          # API keys (not committed)
+│   ├── test_cve_parser.py        # CVE parser (mocked HTTP)
+│   └── test_pipeline.py          # Normalizer, mapper, triage schema, tickets (mocked OpenAI)
+├── .env.example                  # Copy to .env (not committed)
 ├── requirements.txt
+├── requirements-dev.txt          # requirements.txt + pytest
+├── LICENSE
 └── README.md
 ```
 
@@ -189,33 +177,36 @@ siem-triage-agent/
 ### Prerequisites
 
 - Python 3.11+
-- OpenAI API key
-- AWS account with GuardDuty enabled
-- AWS IAM user with `AmazonGuardDutyReadOnlyAccess` + `AWSCloudTrail_ReadOnlyAccess`
+- OpenAI API key (for pipeline runs; the tests don't need one)
+- For live mode only: an AWS account with GuardDuty enabled and an IAM user with `AmazonGuardDutyReadOnlyAccess` + `AWSCloudTrail_ReadOnlyAccess`
 
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/siem-triage-agent.git
+git clone https://github.com/ashiknizam89/siem-triage-agent.git
 cd siem-triage-agent
 
-# Create and activate virtual environment
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
-# Configure environment
 cp .env.example .env
 # Edit .env and add your OPENAI_API_KEY
 
-# Configure AWS credentials
+# Live mode only
 aws configure
 ```
 
-### Run with mock data (no AWS needed)
+### Run the tests
+
+```bash
+pytest -q
+```
+
+66 tests. They make no network calls and need no API key: HTTP and the OpenAI client are mocked.
+
+### Run with mock data (no AWS needed, needs `OPENAI_API_KEY`)
 
 ```bash
 python store/logger.py
@@ -253,19 +244,28 @@ streamlit run store/dashboard.py
 
 ---
 
+## Limitations
+
+- **Live mode needs an AWS account with GuardDuty enabled.** The account used during development is closed, so the committed fixtures (`ingest/mock_alerts.json`, `ingest/live_findings.json`) are the runnable path.
+- **The LLM steps need an OpenAI API key** (triage, and ATT&CK mapping for finding types not in the static table). The tests don't: they mock the OpenAI client and NVD HTTP calls.
+- **Test coverage:** the tests cover the CVE parser, the normalizer and deduplication, the static and LLM-fallback ATT&CK mapping, `TriageDecision` schema validation, `triage_alert()` response handling, and ticket generation. They don't cover the AWS fetchers, the SQLite logger or the Streamlit dashboard, and they don't measure LLM answer quality.
+- **Evaluation:** 20 sample findings, labelled manually, all malicious. See [Evaluation](#evaluation).
+
+---
+
 ## What I learned building this
 
-- **Prompt engineering for structured output** — constraining LLM responses to valid JSON with specific fields using system prompts and Pydantic validation
-- **Agentic pipeline design** — separating concerns across discrete modules that each do one thing, making the system testable and extensible
-- **AWS security tooling** — GuardDuty finding schema, CloudTrail event structure, Boto3 pagination patterns, and IAM least-privilege design
-- **Production reliability patterns** — defensive JSON parsing, graceful fallback chains, hash-based deduplication, temperature=0 for determinism
+- **Prompt engineering for structured output**: constraining LLM responses to valid JSON with specific fields using system prompts and Pydantic validation
+- **Pipeline design**: separating concerns across discrete modules that each do one thing, making the system testable and extensible
+- **AWS security tooling**: GuardDuty finding schema, CloudTrail event structure, Boto3 pagination patterns, and IAM least-privilege design
+- **Handling unreliable LLM output**: defensive JSON parsing, fallback chains, hash-based deduplication, and why temperature=0 alone doesn't make output reproducible
 
 ---
 
 ## Roadmap
 
 - [ ] Slack/email dispatcher for IMMEDIATE priority alerts
-- [ ] Autonomous recon agent (Project 2)
+- [ ] Connect the CVE parser to the triage pipeline
 - [ ] Multi-account AWS support
 - [ ] Alert correlation across finding types
 - [ ] LangGraph stateful agent with memory
@@ -276,4 +276,4 @@ streamlit run store/dashboard.py
 
 **Mohammed Ashik Nizamudeen**
 M.Sc. Cybersecurity · CEH · Munich, Germany
-[LinkedIn](https://linkedin.com/in/mohammed-ashik-n) · [GitHub](https://github.com/yourusername)
+[LinkedIn](https://linkedin.com/in/mohammed-ashik-n) · [GitHub](https://github.com/ashiknizam89)
