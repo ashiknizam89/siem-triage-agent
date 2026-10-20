@@ -35,7 +35,7 @@ A pipeline that ingests AWS GuardDuty findings and produces one structured triag
 AWS GuardDuty → Normalizer → MITRE Mapper → LLM Triage Agent → Ticket → SQLite → Dashboard
                     ↓               ↓                ↓
                Deduplicate    Static lookup     GPT-4o-mini
-               + enrich       + LLM fallback    structured output
+               + enrich       + LLM fallback    JSON → Pydantic
 ```
 
 ### Pipeline stages
@@ -43,7 +43,7 @@ AWS GuardDuty → Normalizer → MITRE Mapper → LLM Triage Agent → Ticket �
 | Stage     | Module                 | What it does                                           |
 | --------- | ---------------------- | ------------------------------------------------------ |
 | Ingest    | `guardduty_fetcher.py` | Pulls findings from AWS via Boto3 with pagination      |
-| Normalize | `normalizer.py`        | Flattens nested JSON, deduplicates by fingerprint hash |
+| Normalize | `normalizer.py`        | Extracts key fields, deduplicates by fingerprint hash  |
 | Map       | `mitre_mapper.py`      | Maps finding types to ATT&CK tactics/techniques        |
 | Triage    | `triage_agent.py`      | LLM classifies severity, generates analyst summary     |
 | Output    | `ticket_generator.py`  | Produces structured SOC tickets                        |
@@ -60,7 +60,7 @@ AWS GuardDuty → Normalizer → MITRE Mapper → LLM Triage Agent → Ticket �
 
 **Hash-based deduplication**: GuardDuty re-emits the same finding repeatedly. The normalizer fingerprints on `finding_type + resource_id + account_id` (excluding timestamp) and drops duplicates before they reach the LLM, so a repeated finding costs no tokens and produces no duplicate ticket.
 
-**Pydantic output validation**: LLM responses are parsed as JSON and validated against the `TriageDecision` schema (required fields, `priority` limited to `IMMEDIATE` / `HIGH` / `MEDIUM` / `LOW`, `confidence` 0–100). A response that fails either step is logged and that alert is skipped; no ticket is created from it.
+**Pydantic output validation**: LLM responses are parsed as JSON and validated against the `TriageDecision` schema (required fields, `priority` limited to `IMMEDIATE` / `HIGH` / `MEDIUM` / `LOW`, `confidence` 0–100). `triage_alert()` raises on a response that fails either step; `triage_all()` logs the error and skips that alert, so no ticket is created from it.
 
 **Read-only AWS access**: live mode only reads. The IAM user needs `AmazonGuardDutyReadOnlyAccess` and `AWSCloudTrail_ReadOnlyAccess`, nothing else.
 
