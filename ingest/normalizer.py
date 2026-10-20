@@ -227,14 +227,14 @@ def normalize(raw_finding: dict) -> NormalizedAlert:
     environment                = _extract_environment(resource)
     severity                   = float(raw_finding.get("severity", 0.0))
     finding_type               = raw_finding.get("type", "Unknown")
-    account_id                 = raw_finding.get("accountId", "unknown")
+    account_id                 = raw_finding.get("accountid", "unknown")
 
     return NormalizedAlert(
         alert_id       = raw_finding.get("id", "no-id"),
         source         = "guardduty",
         account_id     = account_id,
         region         = raw_finding.get("region", "unknown"),
-        timestamp      = raw_finding.get("createdAt", datetime.now(timezone.utc).isoformat()),
+        timestamp      = raw_finding.get("createdat", datetime.now(timezone.utc).isoformat()),
         finding_type   = finding_type,
         severity       = severity,
         severity_label = _severity_label(severity),
