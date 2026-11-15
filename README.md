@@ -52,6 +52,94 @@ AWS GuardDuty → Normalizer → MITRE Mapper → LLM Triage Agent → Ticket �
 
 ---
 
+## Detection Engineering
+
+### Scope: where this sits in a detection pipeline
+
+This project is a **post-detection triage and enrichment layer**, not a detection
+source. The alerts it consumes are produced by AWS GuardDuty; GuardDuty's own
+detection logic is proprietary and is not something this repo reimplements or
+claims credit for.
+
+What the repo *does* own, end to end:
+
+- the parsing and normalisation of GuardDuty findings into a stable internal schema,
+- the deduplication and noise-reduction logic applied before an analyst sees anything,
+- the mapping of findings to MITRE ATT&CK techniques, including an LLM path for findings with no static mapping,
+- the triage decision — severity, priority, and a written analyst-facing rationale,
+- the detection rules under [`detections/`](detections/), which are authored here and are the one part of this repo that performs detection rather than triage.
+
+That distinction is deliberate. A triage layer and a detection engine are
+different problems, and conflating them in a README is the fastest way to lose
+credibility with someone who does this for a living.
+
+### Pipeline stages mapped to detection-engineering concepts
+
+| Pipeline stage | Detection-engineering concept | What it actually does | Honest limitation |
+|---|---|---|---|
+| GuardDuty ingestion (Boto3) | Log source onboarding | Pulls findings from the GuardDuty API | Single log source; no pagination yet. A real SOC normalises many; the schema below has only been exercised against one. |
+| Normalisation | Parser development, field mapping | Flattens the nested GuardDuty finding into a flat internal schema with consistent field names and types | The internal schema is bespoke, not ECS or OCSF. Portability to a commercial SIEM is therefore unproven. |
+| Hash-based deduplication | Alert deduplication / volume reduction | Collapses repeat findings with the same finding type, resource and account within one batch | This reduces **duplicate alert volume**. It is not false-positive reduction — a deduplicated alert that was a false positive is still a false positive, just counted once. |
+| ATT&CK mapping (static lookup) | Detection coverage labelling | Maps known GuardDuty finding types to technique IDs from a maintained lookup table | Labelling and enrichment, not use-case development. |
+| ATT&CK mapping (LLM fallback) | Coverage for unmapped findings | Asks a model to propose a technique for finding types absent from the lookup | Accuracy is unmeasured against ground truth. Treated as a suggestion for analyst review, not an authoritative label. |
+| LLM triage | Alert triage, severity assignment, prioritisation | Produces a severity, a priority, and a natural-language rationale | See the [Evaluation](#evaluation) section — the sample is small. |
+| Pydantic validation | Output schema enforcement | Rejects structurally invalid model output before it reaches storage | Validates structure, not correctness. A well-formed wrong answer passes. |
+| `detections/` (Sigma) | **Detection use-case development** | Rule authoring, tuning, threshold selection, backend deployment | Two rules covering one use case. This is a demonstration of method, not coverage. |
+
+### The detection use case in `detections/`
+
+[`detections/aws_iam_enumeration.yml`](detections/aws_iam_enumeration.yml)
+contains one use case expressed as two Sigma rules:
+
+- a **base rule** matching individual IAM/STS discovery API calls, deliberately
+  at `informational` level because on its own it is noise;
+- a **correlation rule** (`value_count`) that fires when a single principal
+  touches ≥ 15 *distinct* discovery operations within 10 minutes.
+
+The design choice worth explaining: the signal is **breadth, not volume**. A
+polling script calling `ListUsers` five hundred times is the single most likely
+false positive for a naive count-based threshold, and `value_count` on
+`eventName` eliminates it by construction. There is a test asserting exactly
+that ([`tests/test_sigma_iam_enumeration.py`](tests/test_sigma_iam_enumeration.py)).
+
+The rules are tested at three levels — Sigma validity and reference resolution,
+backend conversion, and behaviour against synthetic CloudTrail events using a
+minimal evaluator. The third level proves intent, not runtime equivalence; the
+test module says so explicitly.
+
+Deployable query forms for Elastic (ES|QL, generated) and Microsoft Sentinel
+(KQL, hand-written) are in [`detections/queries/`](detections/queries/), along
+with a comparison of where the three backends differ. They are not equivalent
+detections and the file does not pretend they are.
+
+#### Tuning status
+
+The `>= 15` threshold has **not** been baselined against production telemetry.
+It was chosen from the structure of the rule (19 operations listed; enumeration
+tooling walks nearly all of them) and from small-scale lab observation. Deploying
+this without measuring the distribution of distinct discovery calls per principal
+in the target environment would be malpractice, and the rule file says so.
+
+#### Known evasion
+
+Pacing calls beyond the 10-minute window, or splitting enumeration across two
+assumed roles, defeats the correlation. There is a test asserting the
+two-principal case does *not* fire, so the gap is documented as a gap rather
+than left to be discovered.
+
+### What is deliberately not claimed
+
+- No claim of detection coverage. One use case is not coverage.
+- No claim that the threshold is correct for any environment other than the lab.
+- No claim of deterministic LLM output. `temperature=0` reduces sampling
+  variance; it does not make the API deterministic, and run-to-run variance here
+  is currently unmeasured.
+- No claim of false-positive *rate*. The evaluation set measures severity
+  agreement against manual labels, which is a different quantity.
+
+---
+
+
 ## Key technical decisions
 
 **Two-layer ATT&CK mapping**: a static lookup table (38 GuardDuty finding types) is tried first and needs no API call. Finding types that are not in the table go to the LLM. On the 20-finding evaluation sample, 16 were mapped by the static lookup and 4 by the LLM.
