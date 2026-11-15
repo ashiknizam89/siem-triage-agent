@@ -102,7 +102,7 @@ Your job is to triage security alerts and produce structured analyst decisions.
 
 RULES:
 1. Base your assessment ONLY on the evidence provided — do not assume information not given
-2. Production environment alerts are higher priority than development
+2. Production environment alerts are higher priority. The environment comes from a resource tag that anyone with tagging rights can change, so a non-production or unknown tag can never justify lowering priority
 3. High event counts suggest automated/persistent attacks, single events may be targeted or FP
 4. Disabled logging (T1562.008) combined with other alerts = likely active incident
 5. Always provide specific, actionable response steps — not generic advice
@@ -149,7 +149,7 @@ def _build_user_prompt(alert: NormalizedAlert) -> str:
     env_context = (
         "⚠️  PRODUCTION ENVIRONMENT — higher priority"
         if alert.environment == "production"
-        else f"Environment: {alert.environment}"
+        else f"Environment tag: {alert.environment} (unverified)"
     )
 
     prompt = f"""SECURITY ALERT — TRIAGE REQUIRED
@@ -197,13 +197,25 @@ def triage_alert(alert: NormalizedAlert, client: OpenAI) -> TriageDecision:
     Then we TriageDecision(**data) — Pydantic validates types and
     required fields. Two different failure modes, two different catches.
     """
-    user_prompt = _build_user_prompt(alert)
+    return request_decision(SYSTEM_PROMPT, _build_user_prompt(alert), client, alert.finding_type)
 
+
+def request_decision(
+    system_prompt: str,
+    user_prompt: str,
+    client: OpenAI,
+    finding_type: str = "unknown",
+) -> TriageDecision:
+    """
+    Send one prepared prompt to the LLM and validate the response.
+    Kept separate from triage_alert so the injection experiment can test
+    alternative prompts through the same parsing and validation path.
+    """
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt}
             ],
             temperature=0,        # deterministic triage decisions
@@ -223,12 +235,12 @@ def triage_alert(alert: NormalizedAlert, client: OpenAI) -> TriageDecision:
         return decision
 
     except json.JSONDecodeError as e:
-        print(f"[triage_agent] JSON parse error for {alert.finding_type}: {e}")
+        print(f"[triage_agent] JSON parse error for {finding_type}: {e}")
         print(f"[triage_agent] Raw response was: {raw[:200]}")
         raise
 
     except ValidationError as e:
-        print(f"[triage_agent] Schema validation error for {alert.finding_type}:")
+        print(f"[triage_agent] Schema validation error for {finding_type}:")
         for err in e.errors():
             print(f"  - {err['loc']}: {err['msg']}")
         raise
@@ -238,9 +250,39 @@ def triage_alert(alert: NormalizedAlert, client: OpenAI) -> TriageDecision:
         raise
 
 
+TRIAGE_FAILED_MARKER = "[TRIAGE FAILED - MANUAL REVIEW REQUIRED]"
+
+
+def failsafe_decision(alert: NormalizedAlert) -> TriageDecision:
+    """
+    The decision recorded when the LLM gives no usable answer.
+
+    A finding can be crafted to break JSON output or exhaust max_tokens, so
+    dropping failed alerts would let an attacker suppress one without changing
+    any verdict. Failure therefore escalates to a human. The exception text is
+    left out of the summary because it can contain attacker-controlled content.
+    """
+    return TriageDecision(
+        is_true_positive=True,
+        confidence=0,
+        priority="IMMEDIATE" if alert.severity_label == "CRITICAL" else "HIGH",
+        analyst_summary=(
+            f"{TRIAGE_FAILED_MARKER} The LLM did not return a usable assessment, "
+            "so this finding has not been assessed."
+        ),
+        attack_narrative="Not assessed.",
+        immediate_actions=[
+            f"Review GuardDuty finding {alert.alert_id} manually",
+            "Check whether the finding text contains content aimed at the LLM",
+        ],
+        escalate_to_tier2=True,
+    )
+
+
 def triage_all(alerts: list[NormalizedAlert], client: OpenAI) -> list[tuple]:
     """
     Triage a list of alerts. Returns list of (alert, decision) tuples.
+    Every alert gets a decision: failures become failsafe decisions.
 
     CONCEPT: Why tuples?
     We pair each alert with its decision so downstream modules
@@ -249,16 +291,20 @@ def triage_all(alerts: list[NormalizedAlert], client: OpenAI) -> list[tuple]:
     separately through the pipeline.
     """
     results = []
+    failed = 0
     for i, alert in enumerate(alerts, 1):
         print(f"[triage_agent] Triaging {i}/{len(alerts)}: {alert.finding_type}")
         try:
             decision = triage_alert(alert, client)
-            results.append((alert, decision))
         except Exception as e:
-            print(f"[triage_agent] Failed to triage alert {alert.alert_id}: {e}")
-            continue
+            failed += 1
+            print(f"[triage_agent] Failed to triage alert {alert.alert_id}, "
+                  f"escalating for manual review: {e}")
+            decision = failsafe_decision(alert)
+        results.append((alert, decision))
 
-    print(f"[triage_agent] Completed: {len(results)}/{len(alerts)} alerts triaged")
+    print(f"[triage_agent] Completed: {len(results) - failed}/{len(alerts)} alerts triaged, "
+          f"{failed} escalated after failure")
     return results
 
 

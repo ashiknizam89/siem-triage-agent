@@ -147,11 +147,28 @@ def _extract_actor(action: dict) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+# Resource tags are writable by anyone with tagging rights, and EC2 tag values
+# accept any character up to 256 long, so a tag value must never reach the LLM
+# prompt as free text. Only these recognised values survive normalisation.
+_ENVIRONMENT_ALIASES = {
+    "production": "production", "prod": "production", "prd": "production",
+    "live": "production",
+    "staging": "staging", "stage": "staging", "stg": "staging",
+    "development": "development", "dev": "development",
+    "test": "test", "testing": "test", "qa": "test", "uat": "test",
+    "sandbox": "test",
+}
+
+
 def _extract_environment(resource: dict) -> str:
     """
-    Check resource tags for an Environment tag.
+    Check resource tags for an Environment tag and reduce it to a known value.
     This lets the LLM know if the affected asset is
     production (higher priority) or development.
+
+    Unrecognised values become "unknown". Tag keys are case-sensitive in AWS, so
+    a resource can carry both "Environment" and "environment"; if any of them
+    says production, production wins, so adding a second tag cannot hide it.
 
     Note: resource dict has already been through _lowercase_keys(), so all
     keys are lowercase (e.g. "instancedetails", not "instanceDetails").
@@ -162,10 +179,16 @@ def _extract_environment(resource: dict) -> str:
         (resource.get("s3bucketdetails", [{}])[0].get("tags", [])
          if resource.get("s3bucketdetails") else [])
     )
+    environment = "unknown"
     for tag in tags:
-        if tag.get("key", "").lower() == "environment":
-            return tag.get("value", "unknown").lower()
-    return "unknown"
+        if str(tag.get("key", "")).lower() != "environment":
+            continue
+        value = _ENVIRONMENT_ALIASES.get(str(tag.get("value", "")).strip().lower())
+        if value == "production":
+            return value
+        if value:
+            environment = value
+    return environment
 
 
 def _make_fingerprint(finding_type: str, resource_id: str, account_id: str) -> str:
