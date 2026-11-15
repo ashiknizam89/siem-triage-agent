@@ -1,0 +1,157 @@
+# =============================================================================
+# Detection use case: Cloud account / permission discovery via IAM enumeration
+# =============================================================================
+#
+# Threat model
+# ------------
+# After obtaining a set of AWS credentials (leaked access key, compromised CI
+# runner, SSRF against instance metadata), an operator's first action is almost
+# always to answer three questions:
+#
+#   1. Who am I?              -> sts:GetCallerIdentity
+#   2. What can I do?         -> iam:List*Policies, iam:GetAccountAuthorizationDetails
+#   3. Who else is there?     -> iam:ListUsers, iam:ListRoles, iam:ListGroups
+#
+# Every one of these is a read-only call. None of them is anomalous on its own —
+# infrastructure-as-code tooling, CSPM scanners and the AWS console itself make
+# them constantly. The signal is not the call, it is the *breadth* of calls made
+# by a single principal in a short window.
+#
+# This is why the detection is split into two rules:
+#
+#   - The BASE rule below is deliberately low-fidelity and is NOT intended for
+#     direct alerting. Deployed on its own it would generate hundreds of events
+#     per day in any active account. Its `level` is `informational` to reflect
+#     that honestly.
+#
+#   - The CORRELATION rule counts *distinct* discovery operations per principal
+#     over a 10-minute window. A human or tool doing legitimate work touches a
+#     handful of these operations; an enumeration script walks most of them.
+#     This is where the false-positive reduction actually happens, and it is a
+#     property of the aggregation, not of the base signature.
+#
+# Threshold selection
+# -------------------
+# The `gte: 15` threshold below is a STARTING POINT, not a validated value. It
+# was chosen because the base rule lists 19 operations and a full enumeration
+# script typically walks nearly all of them, while observed legitimate bursts in
+# this lab's CloudTrail sample stayed in the low single digits. It has NOT been
+# baselined against a production account. Anyone deploying this should measure
+# the distribution of distinct discovery calls per principal per 10 minutes in
+# their own environment for at least two weeks and set the threshold from that
+# distribution, not from this file.
+#
+# Known evasion
+# -------------
+# An operator who is aware of this control can defeat it trivially by pacing the
+# calls beyond the 10-minute window, by spreading them across multiple assumed
+# roles, or by reading the same information from a cached copy of
+# GetAccountAuthorizationDetails (a single call that returns nearly everything,
+# and which the base rule therefore also flags in isolation). This detection
+# raises cost for unsophisticated and automated tooling; it is not a control
+# against a patient operator.
+# =============================================================================
+
+name: aws_iam_enumeration_discovery
+title: AWS IAM and STS Discovery API Activity
+id: 64326159-efc1-4c01-a0f9-82550fbc4559
+status: experimental
+description: >
+    Base rule matching individual AWS CloudTrail events for read-only IAM and STS
+    operations used to enumerate principals, policies and effective permissions.
+    Intended as an input to the correlation rule
+    'AWS IAM Enumeration Burst by Single Principal', not for standalone alerting.
+references:
+    - https://attack.mitre.org/techniques/T1087/004/
+    - https://attack.mitre.org/techniques/T1069/003/
+    - https://attack.mitre.org/techniques/T1526/
+author: Mohammed Ashik N
+date: 2026-08-03
+tags:
+    - attack.discovery
+    - attack.t1087.004
+    - attack.t1069.003
+    - attack.t1526
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_iam:
+        eventSource: 'iam.amazonaws.com'
+        eventName:
+            - 'GetAccountAuthorizationDetails'
+            - 'GetAccountSummary'
+            - 'ListAccessKeys'
+            - 'ListAttachedGroupPolicies'
+            - 'ListAttachedRolePolicies'
+            - 'ListAttachedUserPolicies'
+            - 'ListGroupPolicies'
+            - 'ListGroups'
+            - 'ListGroupsForUser'
+            - 'ListInstanceProfiles'
+            - 'ListMFADevices'
+            - 'ListPolicies'
+            - 'ListRolePolicies'
+            - 'ListRoles'
+            - 'ListSSHPublicKeys'
+            - 'ListUserPolicies'
+            - 'ListUsers'
+            - 'ListVirtualMFADevices'
+    selection_sts:
+        eventSource: 'sts.amazonaws.com'
+        eventName: 'GetCallerIdentity'
+    # --- Tuning filters -------------------------------------------------------
+    # AWS service principals (e.g. Config, Access Analyzer, Trusted Advisor)
+    # enumerate IAM continuously by design. Excluded unconditionally.
+    filter_aws_service:
+        userIdentity.type: 'AWSService'
+    # Environment-specific automation. These values are PLACEHOLDERS and must be
+    # replaced during deployment — leaving them in place weakens the rule to no
+    # purpose, and an attacker who can assume one of these roles is invisible.
+    filter_known_automation:
+        userIdentity.sessionContext.sessionIssuer.userName:
+            - 'REPLACE-ME-cspm-scanner-role'
+            - 'REPLACE-ME-terraform-plan-role'
+    condition: 1 of selection_* and not 1 of filter_*
+falsepositives:
+    - Infrastructure-as-code tooling running a plan or drift-detection cycle
+    - CSPM / cloud posture scanners performing scheduled inventory collection
+    - Security or platform engineers working interactively in the IAM console
+    - Onboarding or audit activity, which produces genuine broad enumeration
+level: informational
+
+---
+
+name: aws_iam_enumeration_burst
+title: AWS IAM Enumeration Burst by Single Principal
+id: ec6bbfd6-5425-49c0-b2f2-febf8f7631b6
+status: experimental
+description: >
+    Detects a single AWS principal invoking a broad range of distinct IAM and STS
+    discovery operations within a short window, consistent with automated
+    credential-scoping after initial access. Breadth of distinct operations is
+    used rather than raw call volume, because legitimate tooling tends to call a
+    small number of operations many times while enumeration tooling calls many
+    operations once each.
+references:
+    - https://attack.mitre.org/techniques/T1087/004/
+author: Mohammed Ashik N
+date: 2026-08-03
+tags:
+    - attack.discovery
+    - attack.t1087.004
+correlation:
+    type: value_count
+    rules:
+        - aws_iam_enumeration_discovery
+    group-by:
+        - userIdentity.arn
+    timespan: 10m
+    condition:
+        field: eventName
+        gte: 15
+falsepositives:
+    - Initial account onboarding or a first-run posture assessment, where broad
+      enumeration by a single principal is expected and legitimate
+    - Incident response or audit activity performed by a human under time pressure
+level: high

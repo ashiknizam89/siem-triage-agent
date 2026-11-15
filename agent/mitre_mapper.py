@@ -19,10 +19,50 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel, Field, ValidationError, model_validator
+
 # Add project root to path so we can import from sibling packages
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ingest.normalizer import NormalizedAlert
+
+
+# Enterprise ATT&CK tactics. An LLM-supplied mapping must name one of these.
+ATTACK_TACTICS = {
+    "Reconnaissance": "TA0043",
+    "Resource Development": "TA0042",
+    "Initial Access": "TA0001",
+    "Execution": "TA0002",
+    "Persistence": "TA0003",
+    "Privilege Escalation": "TA0004",
+    "Defense Evasion": "TA0005",
+    "Credential Access": "TA0006",
+    "Discovery": "TA0007",
+    "Lateral Movement": "TA0008",
+    "Collection": "TA0009",
+    "Command and Control": "TA0011",
+    "Exfiltration": "TA0010",
+    "Impact": "TA0040",
+}
+
+
+class LLMMitreMapping(BaseModel):
+    """
+    Contract for llm_enrich output. The LLM reads attacker-influenced finding
+    text and this output is placed in the triage prompt, so free-form strings
+    here would carry an injection from one LLM call into the next.
+    """
+
+    tactic: str
+    tactic_id: str
+    technique: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ,:/()&'.\-]{0,79}$")
+    technique_id: str = Field(pattern=r"^T\d{4}(\.\d{3})?$")
+
+    @model_validator(mode="after")
+    def tactic_matches_attack(self):
+        if ATTACK_TACTICS.get(self.tactic) != self.tactic_id:
+            raise ValueError(f"unrecognised tactic pair: {self.tactic_id}")
+        return self
 
 
 # ─────────────────────────────────────────────────────────────
@@ -288,13 +328,19 @@ Return only the JSON object."""
         # Models sometimes add ```json ... ``` even when told not to.
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
-        mapping = json.loads(raw)
+        mapping = LLMMitreMapping(**json.loads(raw)).model_dump()
         mapping["llm_enriched"] = True
         return mapping
 
     except json.JSONDecodeError as e:
         # LLM returned something unparseable — fall back to unknown
         print(f"[mitre_mapper] LLM returned invalid JSON: {e}")
+        return {**UNKNOWN_MAPPING, "llm_enriched": False}
+
+    except (TypeError, ValidationError) as e:
+        # Valid JSON, but not a valid ATT&CK mapping — fall back to unknown.
+        count = e.error_count() if isinstance(e, ValidationError) else 1
+        print(f"[mitre_mapper] LLM mapping failed validation ({count} errors)")
         return {**UNKNOWN_MAPPING, "llm_enriched": False}
 
     except Exception as e:
